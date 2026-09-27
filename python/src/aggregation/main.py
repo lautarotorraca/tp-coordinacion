@@ -1,6 +1,8 @@
 import os
 import logging
 
+
+
 from common import middleware, message_protocol, fruit_item
 
 ID = int(os.environ["ID"])
@@ -89,8 +91,6 @@ class AggregationFilter:
             nack()
 
     def start(self):
-        """Empieza a leer los resultados que mandan los Sum."""
-
         self.input_exchange.start_consuming(self.process_message)
 
 
