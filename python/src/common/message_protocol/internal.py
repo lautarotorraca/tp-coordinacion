@@ -6,6 +6,11 @@ class MsgType:
 
     DATA = "DATA"
     INPUT_EOF = "INPUT_EOF"
+    START_DRAIN = "START_DRAIN"
+    DRAIN = "DRAIN"
+    DRAIN_ACK = "DRAIN_ACK"
+    FLUSH = "FLUSH"
+    FLUSH_DONE = "FLUSH_DONE"
     SUM_PARTIALS = "SUM_PARTIALS"
     AGG_EOF = "AGG_EOF"
     PARTIAL_TOP = "PARTIAL_TOP"
@@ -30,6 +35,55 @@ def create_input_eof_message(query_id, expected_records):
         "type": MsgType.INPUT_EOF,
         "query_id": query_id,
         "expected_records": expected_records,
+    }
+
+
+def create_start_drain_message(query_id, expected_records):
+    """Pide al coordinador que inicie el cierre de una consulta."""
+
+    return {
+        "type": MsgType.START_DRAIN,
+        "query_id": query_id,
+        "expected_records": expected_records,
+    }
+
+
+def create_drain_message(query_id):
+    """Pide a un Sum que informe su progreso para una consulta."""
+
+    return {
+        "type": MsgType.DRAIN,
+        "query_id": query_id,
+    }
+
+
+def create_drain_ack_message(query_id, sum_id, processed_records):
+    """Informa al coordinador el progreso local de un Sum."""
+
+    return {
+        "type": MsgType.DRAIN_ACK,
+        "query_id": query_id,
+        "sum_id": sum_id,
+        "processed_records": processed_records,
+    }
+
+
+def create_flush_message(query_id):
+    """Habilita a un Sum a publicar sus resultados parciales."""
+
+    return {
+        "type": MsgType.FLUSH,
+        "query_id": query_id,
+    }
+
+
+def create_flush_done_message(query_id, sum_id):
+    """Confirma que un Sum publicó sus resultados parciales."""
+
+    return {
+        "type": MsgType.FLUSH_DONE,
+        "query_id": query_id,
+        "sum_id": sum_id,
     }
 
 
