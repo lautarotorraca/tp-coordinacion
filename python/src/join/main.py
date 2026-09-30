@@ -6,8 +6,12 @@ from common import middleware, message_protocol, fruit_item
 MOM_HOST = os.environ["MOM_HOST"]
 INPUT_QUEUE = os.environ["INPUT_QUEUE"]
 OUTPUT_QUEUE = os.environ["OUTPUT_QUEUE"]
+SUM_AMOUNT = int(os.environ["SUM_AMOUNT"])
+SUM_PREFIX = os.environ["SUM_PREFIX"]
 AGGREGATION_AMOUNT = int(os.environ["AGGREGATION_AMOUNT"])
 TOP_SIZE = int(os.environ["TOP_SIZE"])
+CONTROL_EXCHANGE = f"{SUM_PREFIX}_control"
+CONTROL_ROUTES = [f"{SUM_PREFIX}_{sum_id}" for sum_id in range(SUM_AMOUNT)]
 
 
 class JoinFilter:
@@ -17,9 +21,16 @@ class JoinFilter:
             MOM_HOST, INPUT_QUEUE
         )
         self.output_queue = middleware.MessageMiddlewareQueueRabbitMQ(
-            MOM_HOST, OUTPUT_QUEUE
+            MOM_HOST, OUTPUT_QUEUE, publisher_confirms=True
+        )
+        self.control_output = middleware.MessageMiddlewareExchangeRabbitMQ(
+            MOM_HOST,
+            CONTROL_EXCHANGE,
+            CONTROL_ROUTES,
+            publisher_confirms=True,
         )
         self.states = {}
+        self.completed_queries = set()
 
     def _get_state(self, query_id):
         """Busca los tops parciales recibidos para una consulta."""
@@ -54,8 +65,12 @@ class JoinFilter:
         """Ordena los candidatos de Aggregation y arma el top final."""
 
         candidates = []
+        seen_fruits = set()
         for items in partial_tops.values():
             for fruit, amount in items:
+                if fruit in seen_fruits:
+                    raise ValueError("Fruit received from multiple partitions")
+                seen_fruits.add(fruit)
                 candidates.append(fruit_item.FruitItem(fruit, int(amount)))
 
         candidates.sort(reverse=True)
@@ -66,6 +81,9 @@ class JoinFilter:
 
     def _process_partial_top(self, query_id, aggregation_id, items):
         """Guarda un top parcial y publica el resultado al completar la consulta."""
+
+        if query_id in self.completed_queries:
+            return
 
         state = self._get_state(query_id)
         if aggregation_id not in state:
@@ -79,7 +97,19 @@ class JoinFilter:
             query_id, final_top
         )
         self.output_queue.send(message_protocol.internal.serialize(result))
+        query_done = message_protocol.internal.create_query_done_message(query_id)
+        self.control_output.send(
+            message_protocol.internal.serialize(query_done)
+        )
+        logging.info(
+            "join_finish query_id=%s partials=%s candidates=%s result_size=%s",
+            query_id,
+            len(state),
+            sum(len(items) for items in state.values()),
+            len(final_top),
+        )
         del self.states[query_id]
+        self.completed_queries.add(query_id)
 
     def process_message(self, message, ack, nack):
         """Procesa y confirma un top parcial si no hubo errores."""
