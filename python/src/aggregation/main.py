@@ -1,7 +1,6 @@
 import os
 import logging
-
-
+import signal
 
 from common import middleware, message_protocol, fruit_item
 
@@ -179,12 +178,20 @@ class AggregationFilter:
             nack()
 
     def start(self):
-        self.input_exchange.start_consuming(self.process_message)
+        try:
+            self.input_exchange.start_consuming(self.process_message)
+        finally:
+            self.input_exchange.close()
+            self.output_queue.close()
+
+    def stop(self):
+        self.input_exchange.stop_consuming()
 
 
 def main():
     logging.basicConfig(level=logging.INFO)
     aggregation_filter = AggregationFilter()
+    signal.signal(signal.SIGTERM, lambda _signum, _frame: aggregation_filter.stop())
     aggregation_filter.start()
     return 0
 
