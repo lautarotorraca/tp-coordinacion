@@ -8,6 +8,7 @@ class MsgType:
     INPUT_EOF = "INPUT_EOF"
     DRAIN = "DRAIN"
     SUM_PARTIALS = "SUM_PARTIALS"
+    SUM_PROGRESS = "SUM_PROGRESS"
     QUERY_DONE = "QUERY_DONE"
     PARTIAL_TOP = "PARTIAL_TOP"
     FINAL_TOP = "FINAL_TOP"
@@ -48,20 +49,35 @@ def create_sum_partials_message(
     query_id,
     sum_id,
     sequence,
-    record_count,
-    expected_records,
     items,
 ):
-    """Arma un chunk disjunto de resultados calculados por un Sum."""
+    """Arma un chunk de datos dirigido a un solo Aggregation."""
 
     return {
         "type": MsgType.SUM_PARTIALS,
         "query_id": query_id,
         "sum_id": sum_id,
         "sequence": sequence,
+        "items": items,
+    }
+
+
+def create_sum_progress_message(
+    query_id,
+    sum_id,
+    sequence,
+    record_count,
+    expected_records,
+):
+    """Informa a cada Aggregation qué registros cubre un chunk disjunto."""
+
+    return {
+        "type": MsgType.SUM_PROGRESS,
+        "query_id": query_id,
+        "sum_id": sum_id,
+        "sequence": sequence,
         "record_count": record_count,
         "expected_records": expected_records,
-        "items": items,
     }
 
 

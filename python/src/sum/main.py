@@ -3,7 +3,7 @@ import os
 import signal
 import threading
 
-from common import fruit_item, message_protocol, middleware
+from common import fruit_item, message_protocol, middleware, routing
 
 
 ID = int(os.environ["ID"])
@@ -20,7 +20,6 @@ CONTROL_ROUTES = [f"{SUM_PREFIX}_{sum_id}" for sum_id in range(SUM_AMOUNT)]
 
 class SumFilter:
     def __init__(self):
-        # Estas conexiones pertenecen al thread principal, que consume DATA.
         self.input_queue = middleware.MessageMiddlewareQueueRabbitMQ(
             MOM_HOST,
             INPUT_QUEUE,
@@ -61,7 +60,7 @@ class SumFilter:
                 "draining": False,
                 "expected_records": None,
                 "next_sequence": 1,
-                "initial_chunk": None,
+                "initial_generation": None,
             }
         return self.states[query_id]
 
@@ -70,15 +69,66 @@ class SumFilter:
 
         output.send(message_protocol.internal.serialize(message))
 
-    def _send_chunk(self, outputs, chunk):
-        serialized = message_protocol.internal.serialize(chunk)
+    def _create_generation(
+        self,
+        query_id,
+        sequence,
+        record_count,
+        expected_records,
+        items,
+    ):
+        """Particiona datos y crea el progreso que certifica su publicación."""
+
+        items_by_aggregation = {}
+        for fruit, amount in items:
+            aggregation_id = routing.aggregation_owner(
+                fruit, AGGREGATION_AMOUNT
+            )
+            items_by_aggregation.setdefault(aggregation_id, []).append(
+                [fruit, amount]
+            )
+
+        partials = []
+        for aggregation_id, partition_items in items_by_aggregation.items():
+            partials.append(
+                (
+                    aggregation_id,
+                    message_protocol.internal.create_sum_partials_message(
+                        query_id,
+                        ID,
+                        sequence,
+                        partition_items,
+                    ),
+                )
+            )
+
+        progress = message_protocol.internal.create_sum_progress_message(
+            query_id,
+            ID,
+            sequence,
+            record_count,
+            expected_records,
+        )
+        return {"partials": partials, "progress": progress}
+
+    def _publish_generation(self, outputs, generation):
+        """Publica datos dirigidos antes de difundir su progreso."""
+
+        for aggregation_id, partials in generation["partials"]:
+            outputs[aggregation_id].send(
+                message_protocol.internal.serialize(partials)
+            )
+
+        serialized_progress = message_protocol.internal.serialize(
+            generation["progress"]
+        )
         for output in outputs:
-            output.send(serialized)
+            output.send(serialized_progress)
 
     def _process_data(self, query_id, fruit, amount):
         """Acumula un dato o publica un delta si ya se recibió DRAIN."""
 
-        chunk = None
+        generation = None
         with self.states_lock:
             state = self._get_state_locked(query_id)
             new_item = fruit_item.FruitItem(fruit, int(amount))
@@ -86,9 +136,8 @@ class SumFilter:
             if state["draining"]:
                 sequence = state["next_sequence"]
                 state["next_sequence"] += 1
-                chunk = message_protocol.internal.create_sum_partials_message(
+                generation = self._create_generation(
                     query_id,
-                    ID,
                     sequence,
                     1,
                     state["expected_records"],
@@ -103,8 +152,8 @@ class SumFilter:
 
             state["processed_records"] += 1
 
-        if chunk is not None:
-            self._send_chunk(self.data_outputs, chunk)
+        if generation is not None:
+            self._publish_generation(self.data_outputs, generation)
 
     def _process_eof(self, query_id, expected_records):
         """Difunde el fin de entrada a la cola privada de cada Sum."""
@@ -145,34 +194,36 @@ class SumFilter:
             if state["expected_records"] not in (None, expected_records):
                 raise ValueError("Conflicting expected record count")
 
-            if state["initial_chunk"] is None:
+            if state["initial_generation"] is None:
                 state["draining"] = True
                 state["expected_records"] = expected_records
                 items = [
                     [item.fruit, item.amount]
                     for item in state["items_by_fruit"].values()
                 ]
-                state["initial_chunk"] = (
-                    message_protocol.internal.create_sum_partials_message(
-                        query_id,
-                        ID,
-                        0,
-                        state["processed_records"],
-                        expected_records,
-                        items,
-                    )
+                state["initial_generation"] = self._create_generation(
+                    query_id,
+                    0,
+                    state["processed_records"],
+                    expected_records,
+                    items,
                 )
                 state["items_by_fruit"].clear()
 
-            initial_chunk = state["initial_chunk"]
+            initial_generation = state["initial_generation"]
 
-        self._send_chunk(data_outputs, initial_chunk)
+        self._publish_generation(data_outputs, initial_generation)
         logging.info(
-            "sum_drain query_id=%s sum_id=%s records=%s fruits=%s",
+            "sum_drain query_id=%s sum_id=%s records=%s fruits=%s "
+            "partitions=%s",
             query_id,
             ID,
-            initial_chunk["record_count"],
-            len(initial_chunk["items"]),
+            initial_generation["progress"]["record_count"],
+            sum(
+                len(partials["items"])
+                for _, partials in initial_generation["partials"]
+            ),
+            len(initial_generation["partials"]),
         )
 
     def _process_query_done(self, query_id):
