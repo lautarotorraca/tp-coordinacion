@@ -144,11 +144,11 @@ class SumFilter:
                     [[new_item.fruit, new_item.amount]],
                 )
             else:
-                current_item = state["items_by_fruit"].get(fruit)
-                if current_item is None:
-                    state["items_by_fruit"][fruit] = new_item
-                else:
-                    state["items_by_fruit"][fruit] = current_item + new_item
+                current_item = state["items_by_fruit"].get(
+                    fruit,
+                    fruit_item.FruitItem(fruit, 0),
+                )
+                state["items_by_fruit"][fruit] = current_item + new_item
 
             state["processed_records"] += 1
 
